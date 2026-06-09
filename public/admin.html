@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AION OS Community Admin</title>
+    <link rel="icon" href="assets/logo.png" type="image/png" />
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body data-page="admin">
+    <div class="site-bg community-bg" aria-hidden="true"><span></span><span></span><span></span></div>
+    <header class="site-header glass-shell">
+        <a class="brand" href="index.html"><img src="assets/logo.png" alt="" /><span>AION OS</span></a>
+        <nav class="site-nav always-row" aria-label="Admin navigation">
+            <a href="community.html">Community</a>
+            <button class="nav-pill nav-button" type="button" data-open-auth>Login</button>
+        </nav>
+    </header>
+
+    <main class="section-shell admin-page">
+        <section class="admin-hero glass-card reveal">
+            <p class="eyebrow">Moderator tools</p>
+            <h1>Reports, safety and launch readiness.</h1>
+            <p>This page connects to the backend moderation API. Admin and moderator accounts can review user reports and keep the community healthy.</p>
+        </section>
+        <section class="admin-grid">
+            <article class="glass-card side-widget reveal">
+                <h2>Security checklist</h2>
+                <ul class="check-list">
+                    <li>Change the seeded admin password before going live.</li>
+                    <li>Set a strong JWT_SECRET in production.</li>
+                    <li>Use HTTPS and secure cookies.</li>
+                    <li>Back up the database regularly.</li>
+                </ul>
+            </article>
+            <article class="glass-card side-widget reveal">
+                <h2>Open reports</h2>
+                <div data-reports>
+                    <p class="form-note">Login as admin to view reports.</p>
+                </div>
+            </article>
+        </section>
+    </main>
+
+    <dialog class="auth-modal glass-card" data-auth-modal aria-label="Login or register">
+        <button class="round-button modal-close" type="button" data-close-auth aria-label="Close">×</button>
+        <form class="auth-form" data-auth-form="login">
+            <h2>Admin login</h2>
+            <label>Email<input name="email" type="email" required /></label>
+            <label>Password<input name="password" type="password" required /></label>
+            <button class="button button-primary" type="submit">Login</button>
+        </form>
+        <p class="form-note" data-auth-note>Seeded admin: admin@aionos.dev / changeme-aion</p>
+    </dialog>
+
+    <div class="toast" data-toast role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+    <script src="admin.js"></script>
+</body>
+
+</html>

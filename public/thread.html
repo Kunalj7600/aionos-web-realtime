@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aion Forums Thread</title>
+    <link rel="icon" href="assets/logo.png" type="image/png" />
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body data-page="thread">
+    <div class="site-bg community-bg" aria-hidden="true"><span></span><span></span><span></span></div>
+    <header class="site-header glass-shell">
+        <a class="brand" href="index.html"><img src="assets/logo.png" alt="" /><span>AION OS</span></a>
+        <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false"><span></span><span></span><span></span></button>
+        <nav class="site-nav" aria-label="Primary navigation">
+            <a href="index.html#features">Features</a>
+            <a href="index.html#gallery">Gallery</a>
+            <a class="active" href="community.html">Community</a>
+            <button class="nav-pill nav-button" type="button" data-open-auth>Login</button>
+        </nav>
+    </header>
+
+    <main class="section-shell thread-page" id="main">
+        <a class="back-link" href="community.html">← Back to Aion Forums</a>
+        <section class="thread-detail glass-card" data-thread-detail>
+            <p class="eyebrow">Loading thread</p>
+            <h1>Please wait…</h1>
+        </section>
+        <section class="reply-list" data-reply-list></section>
+        <section class="reply-box glass-card">
+            <h2>Post a reply</h2>
+            <form data-reply-form>
+                <textarea name="body" rows="6" placeholder="Share a fix, suggestion, screenshot link, build note or feedback." required></textarea>
+                <button class="button button-primary" type="submit">Reply</button>
+                <p class="form-note" data-reply-note></p>
+            </form>
+        </section>
+    </main>
+
+    <dialog class="auth-modal glass-card" data-auth-modal aria-label="Login or register">
+        <button class="round-button modal-close" type="button" data-close-auth aria-label="Close">×</button>
+        <div class="tabs" role="tablist" aria-label="Authentication tabs">
+            <button class="tab active" type="button" data-auth-tab="login">Login</button>
+            <button class="tab" type="button" data-auth-tab="register">Register</button>
+        </div>
+        <form class="auth-form" data-auth-form="login">
+            <h2>Welcome back</h2>
+            <label>Email<input name="email" type="email" required autocomplete="email" /></label>
+            <label>Password<input name="password" type="password" required autocomplete="current-password" /></label>
+            <button class="button button-primary" type="submit">Login</button>
+        </form>
+        <form class="auth-form is-hidden" data-auth-form="register">
+            <h2>Create your account</h2>
+            <label>Display name<input name="display_name" required autocomplete="name" /></label>
+            <label>Username<input name="username" required autocomplete="username" pattern="[a-zA-Z0-9_]{3,24}" /></label>
+            <label>Email<input name="email" type="email" required autocomplete="email" /></label>
+            <label>Password<input name="password" type="password" required minlength="8" autocomplete="new-password" /></label>
+            <button class="button button-primary" type="submit">Register</button>
+        </form>
+        <p class="form-note" data-auth-note>Login to reply, vote, bookmark or report.</p>
+    </dialog>
+
+    <div class="toast" data-toast role="status" aria-live="polite"></div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js"></script>
+    <script src="thread.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Aion Forums — community support, ideas, works, releases and development for AION OS." />
+    <title>Aion Forums — AION OS Community</title>
+    <link rel="icon" href="assets/logo.png" type="image/png" />
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body data-page="community">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="site-bg community-bg" aria-hidden="true"><span></span><span></span><span></span></div>
+
+    <header class="site-header glass-shell">
+        <a class="brand" href="index.html" aria-label="AION OS home">
+            <img src="assets/logo.png" alt="" />
+            <span>AION OS</span>
+        </a>
+        <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false"><span></span><span></span><span></span></button>
+        <nav class="site-nav" aria-label="Primary navigation">
+            <a href="index.html#features">Features</a>
+            <a href="index.html#gallery">Gallery</a>
+            <a class="active" href="community.html">Community</a>
+            <a href="download.html">Download</a>
+            <button class="nav-pill nav-button" type="button" data-open-auth>Login</button>
+        </nav>
+    </header>
+
+    <main id="main">
+        <section class="community-hero section-shell">
+            <div class="community-copy reveal">
+                <p class="eyebrow">Aion Forums</p>
+                <h1>Discuss. Suggest. Build. Ship.</h1>
+                <p>A live community space for AION OS users, testers, designers and developers — powered by a real database, authentication, categories, votes, replies and realtime updates.</p>
+                <div class="hero-actions">
+                    <button class="button button-primary" type="button" data-open-topic>Start a topic</button>
+                    <a class="button button-glass" href="#latest">Browse latest</a>
+                </div>
+            </div>
+            <aside class="community-panel glass-card reveal" aria-label="Community status">
+                <div class="panel-stat"><strong data-stat="members">—</strong><span>Members</span></div>
+                <div class="panel-stat"><strong data-stat="threads">—</strong><span>Threads</span></div>
+                <div class="panel-stat"><strong data-stat="posts">—</strong><span>Posts</span></div>
+                <div class="panel-stat"><strong data-stat="online">—</strong><span>Online now</span></div>
+                <div class="live-dot"><span></span> Live forum database connected</div>
+            </aside>
+        </section>
+
+        <section class="section-shell forum-app" id="latest">
+            <aside class="forum-left glass-card reveal">
+                <div class="sidebar-head">
+                    <h2>Spaces</h2>
+                    <button class="round-button subtle" type="button" data-refresh aria-label="Refresh forum">↻</button>
+                </div>
+                <div class="category-list" data-categories>
+                    <button class="category-row active" data-category="all"><span class="category-icon">✦</span><span>All topics</span><small>Latest</small></button>
+                </div>
+                <hr />
+                <h3>Quick filters</h3>
+                <button class="filter-row" data-filter="solved">Solved support</button>
+                <button class="filter-row" data-filter="pinned">Pinned posts</button>
+                <button class="filter-row" data-filter="unanswered">Unanswered</button>
+                <button class="filter-row" data-filter="works">Showcase works</button>
+            </aside>
+
+            <section class="forum-center reveal" aria-label="Forum threads">
+                <div class="forum-tools glass-card">
+                    <label class="search-box">
+            <span>Search</span>
+            <input type="search" placeholder="Search problems, ideas, drivers, ROS, themes…" data-search />
+          </label>
+                    <select data-sort aria-label="Sort topics">
+            <option value="latest">Latest activity</option>
+            <option value="top">Top voted</option>
+            <option value="new">Newest</option>
+            <option value="views">Most viewed</option>
+          </select>
+                    <button class="button button-primary" type="button" data-open-topic id="new-topic">New topic</button>
+                </div>
+
+                <div class="thread-feed" data-thread-feed>
+                    <article class="thread-skeleton glass-card"></article>
+                    <article class="thread-skeleton glass-card"></article>
+                    <article class="thread-skeleton glass-card"></article>
+                </div>
+            </section>
+
+            <aside class="forum-right reveal">
+                <section class="glass-card side-widget">
+                    <h2>Community rules</h2>
+                    <p>Be respectful, include hardware details in support posts, mark solved replies, and keep feedback actionable.</p>
+                </section>
+                <section class="glass-card side-widget">
+                    <h2>Trending tags</h2>
+                    <div class="tag-cloud" data-tag-cloud>
+                        <span>Live tags appear here</span>
+                    </div>
+                </section>
+
+            </aside>
+        </section>
+    </main>
+
+    <dialog class="auth-modal glass-card" data-auth-modal aria-label="Login or register">
+        <button class="round-button modal-close" type="button" data-close-auth aria-label="Close">×</button>
+        <div class="tabs" role="tablist" aria-label="Authentication tabs">
+            <button class="tab active" type="button" data-auth-tab="login">Login</button>
+            <button class="tab" type="button" data-auth-tab="register">Register</button>
+        </div>
+        <form class="auth-form" data-auth-form="login">
+            <h2>Welcome back</h2>
+            <label>Email<input name="email" type="email" required autocomplete="email" /></label>
+            <label>Password<input name="password" type="password" required autocomplete="current-password" /></label>
+            <button class="button button-primary" type="submit">Login</button>
+        </form>
+        <form class="auth-form is-hidden" data-auth-form="register">
+            <h2>Create your account</h2>
+            <label>Display name<input name="display_name" required autocomplete="name" /></label>
+            <label>Username<input name="username" required autocomplete="username" pattern="[a-zA-Z0-9_]{3,24}" title="3-24 letters, numbers or underscores" /></label>
+            <label>Email<input name="email" type="email" required autocomplete="email" /></label>
+            <label>Password<input name="password" type="password" required minlength="8" autocomplete="new-password" /></label>
+            <button class="button button-primary" type="submit">Register</button>
+        </form>
+        <p class="form-note" data-auth-note>Login or create an account to post in the real forum.</p>
+    </dialog>
+
+    <dialog class="topic-modal glass-card" data-topic-modal aria-label="Create a new forum topic">
+        <button class="round-button modal-close" type="button" data-close-topic aria-label="Close">×</button>
+        <form data-topic-form>
+            <p class="eyebrow">New topic</p>
+            <h2>Start a discussion</h2>
+            <div class="form-grid">
+                <label>Category<select name="category_slug" required data-topic-category></select></label>
+                <label>Type<select name="type"><option value="discussion">Discussion</option><option value="support">Support</option><option value="idea">Idea</option><option value="work">Work / Showcase</option><option value="release">Release</option></select></label>
+            </div>
+            <label>Title<input name="title" required maxlength="140" placeholder="Example: Native blur is too strong on dark wallpapers" /></label>
+            <label>Tags<input name="tags" placeholder="native-blur, design, bug" /></label>
+            <label>Details<textarea name="body" rows="8" required placeholder="Describe the issue, idea, suggestion or work. For support, include device model, logs, screenshots and steps to reproduce."></textarea></label>
+            <button class="button button-primary" type="submit">Publish topic</button>
+            <p class="form-note" data-topic-note></p>
+        </form>
+    </dialog>
+
+    <template id="thread-template">
+    <article class="thread-card glass-card">
+      <a class="thread-main" href="">
+        <div class="thread-row-top"><span class="category-pill"></span><span class="thread-status"></span></div>
+        <h2></h2>
+        <p></p>
+        <div class="thread-tags"></div>
+      </a>
+      <div class="thread-metrics">
+        <div><strong data-field="votes">0</strong><span>votes</span></div>
+        <div><strong data-field="replies">0</strong><span>replies</span></div>
+        <div><strong data-field="views">0</strong><span>views</span></div>
+      </div>
+      <div class="thread-author"></div>
+    </article>
+  </template>
+
+    <div class="toast" data-toast role="status" aria-live="polite"></div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js"></script>
+    <script src="community.js"></script>
+</body>
+
+</html>
