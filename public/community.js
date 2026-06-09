@@ -150,8 +150,19 @@
       renderThreads();
       renderTags();
     } catch (error) {
-      feed.innerHTML = `<article class="thread-card glass-card"><div><p class="eyebrow">Forum backend unavailable</p><h2>The real forum API is not connected.</h2><p>Run <code>npm start</code> inside the project folder, then refresh this page. No fake forum posts are shown here.</p></div></article>`;
-    }
+  console.error('Thread loading failed:', error);
+
+  feed.innerHTML = `
+    <article class="thread-card glass-card">
+      <div>
+        <p class="eyebrow">Forum feed error</p>
+        <h2>The forum API responded with an error.</h2>
+        <p>${Aion.escapeHtml(error.message || 'Unknown error')}</p>
+        <p class="muted">Check Render Logs for the full backend error.</p>
+      </div>
+    </article>
+  `;
+}
   };
 
   const upsertThread = (thread) => {
