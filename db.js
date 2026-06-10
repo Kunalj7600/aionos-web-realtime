@@ -1,108 +1,38 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const Database = require('better-sqlite3');
+const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const slugify = require('slugify');
 
-function resolveDatabasePath(value) {
-  const requested = value || path.join('database', 'aionos.db');
-  return path.isAbsolute(requested) ? requested : path.join(__dirname, requested);
+if (!process.env.DATABASE_URL) {
+  console.warn('DATABASE_URL is not set. Add your Neon/Supabase Postgres connection string in Render Environment Variables.');
 }
 
-const databasePath = resolveDatabasePath(process.env.DATABASE_PATH);
-fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+const isLocalDatabase = String(process.env.DATABASE_URL || '').includes('localhost') || String(process.env.DATABASE_URL || '').includes('127.0.0.1');
 
-const db = new Database(databasePath);
-db.pragma('foreign_keys = ON');
-db.pragma('journal_mode = WAL');
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' && !isLocalDatabase ? { rejectUnauthorized: false } : false,
+  max: Number(process.env.PG_POOL_MAX || 10),
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000
+});
 
 const now = () => new Date().toISOString();
 const slug = (value) => slugify(String(value || 'topic'), { lower: true, strict: true, trim: true }) || 'topic';
+const one = (result) => result.rows[0] || null;
 
-function runSchema() {
-  const schema = fs.readFileSync(path.join(__dirname, 'database', 'schema.sql'), 'utf8');
-  db.exec(schema);
+async function query(sql, params = []) {
+  return pool.query(sql, params);
 }
 
-
-function tableExists(table) {
-  return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(table));
+async function runSchema() {
+  const schema = fs.readFileSync(path.join(__dirname, 'database', 'schema.pg.sql'), 'utf8');
+  await pool.query(schema);
 }
 
-function columnExists(table, column) {
-  if (!tableExists(table)) return false;
-  return db.prepare(`PRAGMA table_info(${table})`).all().some((item) => item.name === column);
-}
-
-function addColumnIfMissing(table, column, definition) {
-  if (!tableExists(table) || columnExists(table, column)) return;
-  db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
-}
-
-function migrateExistingDatabase() {
-  // The schema file uses CREATE TABLE IF NOT EXISTS, so an older local database can
-  // survive a code update without receiving newly-added columns. These lightweight
-  // migrations keep existing users/topics and add any missing realtime-forum fields.
-  db.pragma('foreign_keys = OFF');
-
-  addColumnIfMissing('users', 'avatar_url', 'TEXT');
-  addColumnIfMissing('users', 'bio', "TEXT DEFAULT ''");
-  addColumnIfMissing('users', 'role', "TEXT NOT NULL DEFAULT 'member'");
-  addColumnIfMissing('users', 'reputation', 'INTEGER NOT NULL DEFAULT 0');
-  addColumnIfMissing('users', 'is_banned', 'INTEGER NOT NULL DEFAULT 0');
-  addColumnIfMissing('users', 'created_at', "TEXT");
-  addColumnIfMissing('users', 'updated_at', "TEXT");
-
-  addColumnIfMissing('categories', 'description', "TEXT NOT NULL DEFAULT ''");
-  addColumnIfMissing('categories', 'icon', "TEXT DEFAULT '✦'");
-  addColumnIfMissing('categories', 'accent', "TEXT DEFAULT '#9de7ff'");
-  addColumnIfMissing('categories', 'sort_order', 'INTEGER NOT NULL DEFAULT 0');
-  addColumnIfMissing('categories', 'created_at', "TEXT");
-
-  addColumnIfMissing('threads', 'type', "TEXT NOT NULL DEFAULT 'discussion'");
-  addColumnIfMissing('threads', 'status', "TEXT NOT NULL DEFAULT 'open'");
-  addColumnIfMissing('threads', 'is_pinned', 'INTEGER NOT NULL DEFAULT 0');
-  addColumnIfMissing('threads', 'solved_post_id', 'INTEGER');
-  addColumnIfMissing('threads', 'views', 'INTEGER NOT NULL DEFAULT 0');
-  addColumnIfMissing('threads', 'created_at', "TEXT");
-  addColumnIfMissing('threads', 'updated_at', "TEXT");
-  addColumnIfMissing('threads', 'last_activity_at', "TEXT");
-
-  addColumnIfMissing('posts', 'is_solution', 'INTEGER NOT NULL DEFAULT 0');
-  addColumnIfMissing('posts', 'created_at', "TEXT");
-  addColumnIfMissing('posts', 'updated_at', "TEXT");
-
-  if (tableExists('threads')) {
-    db.prepare("UPDATE threads SET type = COALESCE(NULLIF(type, ''), 'discussion') WHERE type IS NULL OR type = ''").run();
-    db.prepare("UPDATE threads SET status = COALESCE(NULLIF(status, ''), 'open') WHERE status IS NULL OR status = ''").run();
-    db.prepare("UPDATE threads SET last_activity_at = COALESCE(last_activity_at, updated_at, created_at, datetime('now')) WHERE last_activity_at IS NULL OR last_activity_at = ''").run();
-    db.prepare("UPDATE threads SET updated_at = COALESCE(updated_at, created_at, datetime('now')) WHERE updated_at IS NULL OR updated_at = ''").run();
-    db.prepare("UPDATE threads SET created_at = COALESCE(created_at, datetime('now')) WHERE created_at IS NULL OR created_at = ''").run();
-  }
-  if (tableExists('users')) {
-    db.prepare("UPDATE users SET created_at = COALESCE(created_at, datetime('now')) WHERE created_at IS NULL OR created_at = ''").run();
-    db.prepare("UPDATE users SET updated_at = COALESCE(updated_at, created_at, datetime('now')) WHERE updated_at IS NULL OR updated_at = ''").run();
-  }
-  if (tableExists('categories')) {
-    db.prepare("UPDATE categories SET created_at = COALESCE(created_at, datetime('now')) WHERE created_at IS NULL OR created_at = ''").run();
-  }
-  if (tableExists('posts')) {
-    db.prepare("UPDATE posts SET created_at = COALESCE(created_at, datetime('now')) WHERE created_at IS NULL OR created_at = ''").run();
-    db.prepare("UPDATE posts SET updated_at = COALESCE(updated_at, created_at, datetime('now')) WHERE updated_at IS NULL OR updated_at = ''").run();
-  }
-
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_threads_category ON threads(category_id);
-    CREATE INDEX IF NOT EXISTS idx_threads_activity ON threads(last_activity_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_threads_status ON threads(status);
-    CREATE INDEX IF NOT EXISTS idx_posts_thread ON posts(thread_id);
-    CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
-  `);
-  db.pragma('foreign_keys = ON');
-}
-
-function seedCategories() {
+async function seedCategories() {
   const categories = [
     ['support', 'Support Desk', 'Problems, logs, fixes and installation help.', '◎', '#9de7ff', 10],
     ['ideas', 'Ideas & Requests', 'Feature requests, UI feedback and roadmap suggestions.', '✧', '#b9a6ff', 20],
@@ -112,27 +42,33 @@ function seedCategories() {
     ['gaming', 'Gaming & Drivers', 'Steam, NVIDIA, drivers and gaming performance.', '◈', '#c8b6ff', 60],
     ['robotics', 'Robotics & ROS 2', 'ROS 2, RViz, robotics workflows and lab builds.', '◆', '#a8ecff', 70]
   ];
-  const insert = db.prepare(`
-    INSERT OR IGNORE INTO categories (slug, name, description, icon, accent, sort_order)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-  const tx = db.transaction(() => categories.forEach((cat) => insert.run(...cat)));
-  tx();
+
+  for (const cat of categories) {
+    await query(
+      `INSERT INTO categories (slug, name, description, icon, accent, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (slug) DO NOTHING`,
+      cat
+    );
+  }
 }
 
-function ensureUser({ username, display_name, email, password, role = 'member', bio = '' }) {
-  const existing = db.prepare('SELECT * FROM users WHERE email = ? OR username = ?').get(email, username);
+async function ensureUser({ username, display_name, email, password, role = 'member', bio = '' }) {
+  const existing = one(await query('SELECT * FROM users WHERE LOWER(email) = LOWER($1) OR LOWER(username) = LOWER($2) LIMIT 1', [email, username]));
   if (existing) return existing;
+
   const passwordHash = bcrypt.hashSync(password, 12);
   const timestamp = now();
-  const result = db.prepare(`
-    INSERT INTO users (username, display_name, email, password_hash, role, bio, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(username, display_name, email, passwordHash, role, bio, timestamp, timestamp);
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid);
+  const inserted = one(await query(
+    `INSERT INTO users (username, display_name, email, password_hash, role, bio, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING *`,
+    [username, display_name, email, passwordHash, role, bio, timestamp, timestamp]
+  ));
+  return inserted;
 }
 
-function ensureLaunchAdmin() {
+async function ensureLaunchAdmin() {
   const adminEmail = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
   const adminPassword = String(process.env.ADMIN_PASSWORD || '');
   const adminUsername = String(process.env.ADMIN_USERNAME || 'aion-admin').trim();
@@ -149,7 +85,7 @@ function ensureLaunchAdmin() {
     });
   }
 
-  const userCount = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
+  const userCount = Number(one(await query('SELECT COUNT(*)::int AS count FROM users')).count);
   if (userCount === 0 && process.env.NODE_ENV !== 'production') {
     return ensureUser({
       username: 'aion-admin',
@@ -163,38 +99,49 @@ function ensureLaunchAdmin() {
   return null;
 }
 
-function ensureTag(name) {
+async function ensureTag(name) {
   const clean = String(name || '').trim().replace(/^#/, '').slice(0, 32);
   if (!clean) return null;
   const tagSlug = slug(clean);
-  db.prepare('INSERT OR IGNORE INTO tags (name, slug) VALUES (?, ?)').run(clean, tagSlug);
-  return db.prepare('SELECT * FROM tags WHERE slug = ?').get(tagSlug);
+  await query(
+    `INSERT INTO tags (name, slug)
+     VALUES ($1, $2)
+     ON CONFLICT (slug) DO NOTHING`,
+    [clean, tagSlug]
+  );
+  return one(await query('SELECT * FROM tags WHERE slug = $1 LIMIT 1', [tagSlug]));
 }
 
-function attachTags(threadId, tags) {
-  const insert = db.prepare('INSERT OR IGNORE INTO thread_tags (thread_id, tag_id) VALUES (?, ?)');
+async function attachTags(threadId, tags) {
   for (const tagName of tags || []) {
-    const tag = ensureTag(tagName);
-    if (tag) insert.run(threadId, tag.id);
+    const tag = await ensureTag(tagName);
+    if (tag) {
+      await query(
+        `INSERT INTO thread_tags (thread_id, tag_id)
+         VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
+        [threadId, tag.id]
+      );
+    }
   }
 }
 
-function uniqueThreadSlug(title) {
+async function uniqueThreadSlug(title) {
   const base = slug(title);
   let candidate = base;
   let index = 2;
-  const exists = db.prepare('SELECT id FROM threads WHERE slug = ?');
-  while (exists.get(candidate)) {
+  while (one(await query('SELECT id FROM threads WHERE slug = $1 LIMIT 1', [candidate]))) {
     candidate = `${base}-${index++}`;
   }
   return candidate;
 }
 
-function seedSampleContentIfEnabled() {
+async function seedSampleContentIfEnabled() {
   if (String(process.env.SEED_SAMPLE_CONTENT || '').toLowerCase() !== 'true') return;
-  const count = db.prepare('SELECT COUNT(*) AS count FROM threads').get().count;
+  const count = Number(one(await query('SELECT COUNT(*)::int AS count FROM threads')).count);
   if (count > 0) return;
-  const admin = ensureLaunchAdmin() || ensureUser({
+
+  const admin = await ensureLaunchAdmin() || await ensureUser({
     username: 'aion-team',
     display_name: 'AION Team',
     email: 'team@aionos.local',
@@ -202,31 +149,34 @@ function seedSampleContentIfEnabled() {
     role: 'admin',
     bio: 'Official AION OS team account.'
   });
-  const category = db.prepare('SELECT id FROM categories WHERE slug = ?').get('releases');
+
+  const category = one(await query('SELECT id FROM categories WHERE slug = $1 LIMIT 1', ['releases']));
   const timestamp = now();
-  const result = db.prepare(`
-    INSERT INTO threads (category_id, author_id, title, slug, body, type, status, is_pinned, created_at, updated_at, last_activity_at)
-    VALUES (?, ?, ?, ?, ?, 'release', 'open', 1, ?, ?, ?)
-  `).run(
-    category.id,
-    admin.id,
-    'Welcome to Aion Forums',
-    uniqueThreadSlug('Welcome to Aion Forums'),
-    'This optional sample thread confirms the database is working. Disable SEED_SAMPLE_CONTENT before launch if you want the forum to start completely empty.',
-    timestamp,
-    timestamp,
-    timestamp
-  );
-  attachTags(result.lastInsertRowid, ['welcome', 'launch']);
+  const threadSlug = await uniqueThreadSlug('Welcome to Aion Forums');
+  const inserted = one(await query(
+    `INSERT INTO threads (category_id, author_id, title, slug, body, type, status, is_pinned, created_at, updated_at, last_activity_at)
+     VALUES ($1, $2, $3, $4, $5, 'release', 'open', 1, $6, $7, $8)
+     RETURNING id`,
+    [
+      category.id,
+      admin.id,
+      'Welcome to Aion Forums',
+      threadSlug,
+      'This optional sample thread confirms the Postgres database is working. Disable SEED_SAMPLE_CONTENT before launch if you want the forum to start completely empty.',
+      timestamp,
+      timestamp,
+      timestamp
+    ]
+  ));
+  await attachTags(inserted.id, ['welcome', 'launch']);
 }
 
-function initDb() {
-  runSchema();
-  migrateExistingDatabase();
-  seedCategories();
-  ensureLaunchAdmin();
-  seedSampleContentIfEnabled();
-  return db;
+async function initDb() {
+  await runSchema();
+  await seedCategories();
+  await ensureLaunchAdmin();
+  await seedSampleContentIfEnabled();
+  return pool;
 }
 
 function publicUser(user) {
@@ -243,4 +193,16 @@ function publicUser(user) {
   };
 }
 
-module.exports = { db, initDb, publicUser, uniqueThreadSlug, attachTags, ensureTag, ensureUser, slug, databasePath };
+module.exports = {
+  pool,
+  query,
+  one,
+  initDb,
+  publicUser,
+  uniqueThreadSlug,
+  attachTags,
+  ensureTag,
+  ensureUser,
+  slug,
+  databasePath: 'postgres:DATABASE_URL'
+};

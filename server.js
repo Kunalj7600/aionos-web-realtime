@@ -9,9 +9,7 @@ const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
-const { db, initDb, publicUser, uniqueThreadSlug, attachTags, databasePath } = require('./db');
-
-initDb();
+const { query, one, initDb, publicUser, uniqueThreadSlug, attachTags, databasePath } = require('./db');
 
 const app = express();
 const server = http.createServer(app);
@@ -20,12 +18,14 @@ const JWT_SECRET = process.env.JWT_SECRET || 'development-only-change-me';
 const COOKIE_SECURE = String(process.env.COOKIE_SECURE || '').toLowerCase() === 'true';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || undefined;
 
+app.set('trust proxy', 1);
+
 const io = new Server(server, {
   cors: { origin: CORS_ORIGIN || true, credentials: true }
 });
 
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
+app.use(cors({ origin: CORS_ORIGIN || true, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 app.use(rateLimit({ windowMs: 60_000, max: 180, standardHeaders: true, legacyHeaders: false }));
@@ -36,21 +36,28 @@ const parseTags = (tags) => {
   const list = Array.isArray(tags) ? tags : String(tags || '').split(',');
   return [...new Set(list.map((tag) => clean(tag, 32).replace(/^#/, '')).filter(Boolean))].slice(0, 8);
 };
-const cookieOptions = { httpOnly: true, sameSite: 'lax', secure: COOKIE_SECURE, maxAge: 1000 * 60 * 60 * 24 * 30 };
+const cookieOptions = {
+  httpOnly: true,
+  sameSite: COOKIE_SECURE && CORS_ORIGIN ? 'none' : 'lax',
+  secure: COOKIE_SECURE,
+  maxAge: 1000 * 60 * 60 * 24 * 30
+};
 
-function getStats() {
-  const members = db.prepare('SELECT COUNT(*) AS count FROM users WHERE is_banned = 0').get().count;
-  const threads = db.prepare('SELECT COUNT(*) AS count FROM threads WHERE status != ?').get('archived').count;
-  const posts = db.prepare('SELECT COUNT(*) AS count FROM posts').get().count;
+const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+async function getStats() {
+  const members = Number(one(await query('SELECT COUNT(*)::int AS count FROM users WHERE is_banned = 0')).count);
+  const threads = Number(one(await query(`SELECT COUNT(*)::int AS count FROM threads WHERE status != 'archived'`)).count);
+  const posts = Number(one(await query('SELECT COUNT(*)::int AS count FROM posts')).count);
   return { members, threads, posts, online: io.engine.clientsCount || 0 };
 }
 
-function emitStats() {
-  io.to('community').emit('stats:updated', getStats());
+async function emitStats() {
+  io.to('community').emit('stats:updated', await getStats());
 }
 
-function emitCategories() {
-  const categories = listCategories();
+async function emitCategories() {
+  const categories = await listCategories();
   io.to('community').emit('categories:updated', { categories });
 }
 
@@ -58,12 +65,12 @@ function signUser(user) {
   return jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
 }
 
-function attachUser(req, _res, next) {
+async function attachUser(req, _res, next) {
   const token = req.cookies.aion_token || (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (token) {
     try {
       const payload = jwt.verify(token, JWT_SECRET);
-      req.user = db.prepare('SELECT * FROM users WHERE id = ? AND is_banned = 0').get(payload.sub) || null;
+      req.user = one(await query('SELECT * FROM users WHERE id = $1 AND is_banned = 0 LIMIT 1', [payload.sub])) || null;
     } catch (_) {
       req.user = null;
     }
@@ -82,26 +89,6 @@ function requireModerator(req, res, next) {
   next();
 }
 
-function threadSelectSql(where = '') {
-  return `
-    SELECT
-      t.*,
-      c.slug AS category_slug,
-      c.name AS category_name,
-      c.icon AS category_icon,
-      u.username,
-      u.display_name,
-      u.avatar_url,
-      COALESCE((SELECT SUM(value) FROM thread_votes WHERE thread_id = t.id), 0) AS votes,
-      (SELECT COUNT(*) FROM posts WHERE thread_id = t.id) AS replies,
-      COALESCE((SELECT group_concat(tags.name, ',') FROM tags JOIN thread_tags ON tags.id = thread_tags.tag_id WHERE thread_tags.thread_id = t.id), '') AS tags
-    FROM threads t
-    JOIN categories c ON c.id = t.category_id
-    JOIN users u ON u.id = t.author_id
-    ${where}
-  `;
-}
-
 function mapThread(row) {
   return {
     ...row,
@@ -113,33 +100,54 @@ function mapThread(row) {
   };
 }
 
-function getThreadById(id) {
-  const row = db.prepare(threadSelectSql('WHERE t.id = ?')).get(id);
+function threadSelectSql(where = '') {
+  return `
+    SELECT
+      t.*,
+      c.slug AS category_slug,
+      c.name AS category_name,
+      c.icon AS category_icon,
+      u.username,
+      u.display_name,
+      u.avatar_url,
+      COALESCE((SELECT SUM(value) FROM thread_votes WHERE thread_id = t.id), 0)::int AS votes,
+      (SELECT COUNT(*)::int FROM posts WHERE thread_id = t.id) AS replies,
+      COALESCE((SELECT string_agg(tags.name, ',') FROM tags JOIN thread_tags ON tags.id = thread_tags.tag_id WHERE thread_tags.thread_id = t.id), '') AS tags
+    FROM threads t
+    JOIN categories c ON c.id = t.category_id
+    JOIN users u ON u.id = t.author_id
+    ${where}
+  `;
+}
+
+async function getThreadById(id) {
+  const row = one(await query(threadSelectSql('WHERE t.id = $1'), [id]));
   return row ? mapThread(row) : null;
 }
 
-function getThreadBySlug(slug) {
-  const row = db.prepare(threadSelectSql('WHERE t.slug = ?')).get(slug);
+async function getThreadBySlug(slug) {
+  const row = one(await query(threadSelectSql('WHERE t.slug = $1'), [slug]));
   return row ? mapThread(row) : null;
 }
 
-function listCategories() {
-  return db.prepare(`
-    SELECT c.*, COUNT(t.id) AS thread_count
+async function listCategories() {
+  const result = await query(`
+    SELECT c.*, COUNT(t.id)::int AS thread_count
     FROM categories c
     LEFT JOIN threads t ON t.category_id = c.id AND t.status != 'archived'
     GROUP BY c.id
     ORDER BY c.sort_order ASC, c.name ASC
-  `).all();
+  `);
+  return result.rows;
 }
 
-function broadcastThreadUpdate(thread) {
+async function broadcastThreadUpdate(thread) {
   if (!thread) return;
   io.to('community').emit('thread:updated', { thread });
   io.to(`category:${thread.category_slug}`).emit('thread:updated', { thread });
   io.to(`thread:${thread.slug}`).emit('thread:updated', { thread });
-  emitStats();
-  emitCategories();
+  await emitStats();
+  await emitCategories();
 }
 
 io.on('connection', (socket) => {
@@ -160,7 +168,7 @@ io.on('connection', (socket) => {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, name: 'AION OS Community API', realtime: true, database: databasePath }));
 
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', asyncHandler(async (req, res) => {
   const username = clean(req.body.username, 24);
   const displayName = clean(req.body.display_name || username, 80);
   const email = clean(req.body.email, 120).toLowerCase();
@@ -168,69 +176,74 @@ app.post('/api/auth/register', (req, res) => {
   if (!/^[a-zA-Z0-9_]{3,24}$/.test(username)) return res.status(400).json({ error: 'Username must be 3-24 letters, numbers or underscores.' });
   if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'Valid email required.' });
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
-  const exists = db.prepare('SELECT id FROM users WHERE email = ? OR username = ?').get(email, username);
+
+  const exists = one(await query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) OR LOWER(username) = LOWER($2) LIMIT 1', [email, username]));
   if (exists) return res.status(409).json({ error: 'Email or username already exists.' });
+
   const passwordHash = bcrypt.hashSync(password, 12);
   const timestamp = new Date().toISOString();
-  const result = db.prepare('INSERT INTO users (username, display_name, email, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(username, displayName, email, passwordHash, timestamp, timestamp);
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid);
+  const user = one(await query(
+    `INSERT INTO users (username, display_name, email, password_hash, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [username, displayName, email, passwordHash, timestamp, timestamp]
+  ));
   res.cookie('aion_token', signUser(user), cookieOptions).status(201).json({ user: publicUser(user) });
-  emitStats();
-});
+  await emitStats();
+}));
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', asyncHandler(async (req, res) => {
   const email = clean(req.body.email, 120).toLowerCase();
   const password = String(req.body.password || '');
-  const user = db.prepare('SELECT * FROM users WHERE email = ? AND is_banned = 0').get(email);
+  const user = one(await query('SELECT * FROM users WHERE LOWER(email) = LOWER($1) AND is_banned = 0 LIMIT 1', [email]));
   if (!user || !bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: 'Invalid email or password.' });
   res.cookie('aion_token', signUser(user), cookieOptions).json({ user: publicUser(user) });
-});
+}));
 
 app.post('/api/auth/logout', (_req, res) => {
-  res.clearCookie('aion_token').json({ ok: true });
+  res.clearCookie('aion_token', cookieOptions).json({ ok: true });
 });
 
 app.get('/api/auth/me', (req, res) => {
   res.json({ user: publicUser(req.user) });
 });
 
-app.get('/api/stats', (_req, res) => res.json(getStats()));
+app.get('/api/stats', asyncHandler(async (_req, res) => res.json(await getStats())));
 
-app.get('/api/categories', (_req, res) => {
-  res.json({ categories: listCategories() });
-});
+app.get('/api/categories', asyncHandler(async (_req, res) => {
+  res.json({ categories: await listCategories() });
+}));
 
-app.get('/api/threads', (req, res, next) => {
-  try {
-    const category = clean(req.query.category, 60);
-    const q = clean(req.query.q, 120);
-    const sort = clean(req.query.sort, 20) || 'latest';
-    const where = [`t.status != 'archived'`];
-    const params = {};
-    if (category) {
-      where.push('c.slug = @category');
-      params.category = category;
-    }
-    if (q) {
-      where.push(`(t.title LIKE @q OR t.body LIKE @q OR EXISTS (SELECT 1 FROM thread_tags tt JOIN tags tg ON tg.id = tt.tag_id WHERE tt.thread_id = t.id AND tg.name LIKE @q))`);
-      params.q = `%${q}%`;
-    }
-    const order = {
-      latest: 't.is_pinned DESC, datetime(t.last_activity_at) DESC',
-      top: 't.is_pinned DESC, votes DESC, datetime(t.last_activity_at) DESC',
-      new: 'datetime(t.created_at) DESC',
-      views: 't.views DESC, datetime(t.last_activity_at) DESC'
-    }[sort] || 't.is_pinned DESC, datetime(t.last_activity_at) DESC';
-    const sql = `${threadSelectSql(`WHERE ${where.join(' AND ')}`)} ORDER BY ${order} LIMIT 100`;
-    const threads = db.prepare(sql).all(params).map(mapThread);
-    res.json({ threads });
-  } catch (error) {
-    console.error('Failed to list forum threads:', error);
-    next(error);
+app.get('/api/threads', asyncHandler(async (req, res) => {
+  const category = clean(req.query.category, 60);
+  const q = clean(req.query.q, 120);
+  const sort = clean(req.query.sort, 20) || 'latest';
+  const where = [`t.status != 'archived'`];
+  const params = [];
+
+  if (category) {
+    params.push(category);
+    where.push(`c.slug = $${params.length}`);
   }
-});
+  if (q) {
+    params.push(`%${q}%`);
+    const qIndex = params.length;
+    where.push(`(t.title ILIKE $${qIndex} OR t.body ILIKE $${qIndex} OR EXISTS (SELECT 1 FROM thread_tags tt JOIN tags tg ON tg.id = tt.tag_id WHERE tt.thread_id = t.id AND tg.name ILIKE $${qIndex}))`);
+  }
 
-app.post('/api/threads', requireAuth, (req, res) => {
+  const order = {
+    latest: 't.is_pinned DESC, t.last_activity_at DESC',
+    top: 't.is_pinned DESC, votes DESC, t.last_activity_at DESC',
+    new: 't.created_at DESC',
+    views: 't.views DESC, t.last_activity_at DESC'
+  }[sort] || 't.is_pinned DESC, t.last_activity_at DESC';
+
+  const sql = `${threadSelectSql(`WHERE ${where.join(' AND ')}`)} ORDER BY ${order} LIMIT 100`;
+  const threads = (await query(sql, params)).rows.map(mapThread);
+  res.json({ threads });
+}));
+
+app.post('/api/threads', requireAuth, asyncHandler(async (req, res) => {
   const title = clean(req.body.title, 140);
   const body = clean(req.body.body, 8000);
   const categorySlug = clean(req.body.category_slug, 60);
@@ -239,114 +252,127 @@ app.post('/api/threads', requireAuth, (req, res) => {
   if (title.length < 8) return res.status(400).json({ error: 'Title must be at least 8 characters.' });
   if (body.length < 20) return res.status(400).json({ error: 'Details must be at least 20 characters.' });
   if (!allowedTypes.includes(type)) return res.status(400).json({ error: 'Invalid topic type.' });
-  const category = db.prepare('SELECT * FROM categories WHERE slug = ?').get(categorySlug);
+
+  const category = one(await query('SELECT * FROM categories WHERE slug = $1 LIMIT 1', [categorySlug]));
   if (!category) return res.status(400).json({ error: 'Choose a valid category.' });
+
   const timestamp = new Date().toISOString();
-  const result = db.prepare(`
-    INSERT INTO threads (category_id, author_id, title, slug, body, type, status, created_at, updated_at, last_activity_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
-  `).run(category.id, req.user.id, title, uniqueThreadSlug(title), body, type, timestamp, timestamp, timestamp);
-  attachTags(result.lastInsertRowid, parseTags(req.body.tags));
-  const thread = getThreadById(result.lastInsertRowid);
+  const threadSlug = await uniqueThreadSlug(title);
+  const inserted = one(await query(
+    `INSERT INTO threads (category_id, author_id, title, slug, body, type, status, created_at, updated_at, last_activity_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 'open', $7, $8, $9)
+     RETURNING id`,
+    [category.id, req.user.id, title, threadSlug, body, type, timestamp, timestamp, timestamp]
+  ));
+  await attachTags(inserted.id, parseTags(req.body.tags));
+  const thread = await getThreadById(inserted.id);
   res.status(201).json({ thread });
   io.to('community').emit('thread:created', { thread });
   io.to(`category:${thread.category_slug}`).emit('thread:created', { thread });
-  emitStats();
-  emitCategories();
-});
+  await emitStats();
+  await emitCategories();
+}));
 
-app.get('/api/threads/:slug', (req, res) => {
-  const thread = getThreadBySlug(req.params.slug);
+app.get('/api/threads/:slug', asyncHandler(async (req, res) => {
+  const thread = await getThreadBySlug(req.params.slug);
   if (!thread) return res.status(404).json({ error: 'Thread not found.' });
-  db.prepare('UPDATE threads SET views = views + 1 WHERE id = ?').run(thread.id);
-  const updatedThread = getThreadById(thread.id);
-  const posts = db.prepare(`
-    SELECT p.*, u.username, u.display_name, u.avatar_url
-    FROM posts p
-    JOIN users u ON u.id = p.author_id
-    WHERE p.thread_id = ?
-    ORDER BY datetime(p.created_at) ASC
-  `).all(thread.id);
+  await query('UPDATE threads SET views = views + 1 WHERE id = $1', [thread.id]);
+  const updatedThread = await getThreadById(thread.id);
+  const posts = (await query(
+    `SELECT p.*, u.username, u.display_name, u.avatar_url
+     FROM posts p
+     JOIN users u ON u.id = p.author_id
+     WHERE p.thread_id = $1
+     ORDER BY p.created_at ASC`,
+    [thread.id]
+  )).rows;
   res.json({ thread: updatedThread, posts });
   io.to('community').emit('thread:updated', { thread: updatedThread });
   io.to(`thread:${updatedThread.slug}`).emit('thread:updated', { thread: updatedThread });
-});
+}));
 
-app.post('/api/threads/:slug/posts', requireAuth, (req, res) => {
+app.post('/api/threads/:slug/posts', requireAuth, asyncHandler(async (req, res) => {
   const body = clean(req.body.body, 8000);
   if (body.length < 2) return res.status(400).json({ error: 'Reply cannot be empty.' });
-  const thread = db.prepare('SELECT * FROM threads WHERE slug = ?').get(req.params.slug);
+  const thread = one(await query('SELECT * FROM threads WHERE slug = $1 LIMIT 1', [req.params.slug]));
   if (!thread) return res.status(404).json({ error: 'Thread not found.' });
   if (['locked', 'archived'].includes(thread.status)) return res.status(403).json({ error: 'Thread is locked.' });
+
   const timestamp = new Date().toISOString();
-  const result = db.prepare('INSERT INTO posts (thread_id, author_id, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(thread.id, req.user.id, body, timestamp, timestamp);
-  db.prepare('UPDATE threads SET updated_at = ?, last_activity_at = ? WHERE id = ?').run(timestamp, timestamp, thread.id);
-  const post = db.prepare(`SELECT p.*, u.username, u.display_name, u.avatar_url FROM posts p JOIN users u ON u.id = p.author_id WHERE p.id = ?`).get(result.lastInsertRowid);
-  const updatedThread = getThreadById(thread.id);
+  const inserted = one(await query(
+    `INSERT INTO posts (thread_id, author_id, body, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id`,
+    [thread.id, req.user.id, body, timestamp, timestamp]
+  ));
+  await query('UPDATE threads SET updated_at = $1, last_activity_at = $2 WHERE id = $3', [timestamp, timestamp, thread.id]);
+  const post = one(await query(
+    `SELECT p.*, u.username, u.display_name, u.avatar_url
+     FROM posts p
+     JOIN users u ON u.id = p.author_id
+     WHERE p.id = $1`,
+    [inserted.id]
+  ));
+  const updatedThread = await getThreadById(thread.id);
   res.status(201).json({ post, thread: updatedThread });
   io.to(`thread:${updatedThread.slug}`).emit('post:created', { post, thread: updatedThread });
-  broadcastThreadUpdate(updatedThread);
-});
+  await broadcastThreadUpdate(updatedThread);
+}));
 
-app.post('/api/threads/:id/vote', requireAuth, (req, res) => {
+app.post('/api/threads/:id/vote', requireAuth, asyncHandler(async (req, res) => {
   const threadId = Number(req.params.id);
   const value = Number(req.body.value) === -1 ? -1 : 1;
-  const thread = db.prepare('SELECT id FROM threads WHERE id = ?').get(threadId);
+  const thread = one(await query('SELECT id FROM threads WHERE id = $1 LIMIT 1', [threadId]));
   if (!thread) return res.status(404).json({ error: 'Thread not found.' });
-  db.prepare(`
-    INSERT INTO thread_votes (thread_id, user_id, value)
-    VALUES (?, ?, ?)
-    ON CONFLICT(thread_id, user_id) DO UPDATE SET value = excluded.value
-  `).run(threadId, req.user.id, value);
-  const updatedThread = getThreadById(threadId);
+  await query(
+    `INSERT INTO thread_votes (thread_id, user_id, value)
+     VALUES ($1, $2, $3)
+     ON CONFLICT(thread_id, user_id) DO UPDATE SET value = EXCLUDED.value`,
+    [threadId, req.user.id, value]
+  );
+  const updatedThread = await getThreadById(threadId);
   res.json({ votes: updatedThread.votes, thread: updatedThread });
-  broadcastThreadUpdate(updatedThread);
-});
+  await broadcastThreadUpdate(updatedThread);
+}));
 
-app.post('/api/threads/:id/bookmark', requireAuth, (req, res) => {
+app.post('/api/threads/:id/bookmark', requireAuth, asyncHandler(async (req, res) => {
   const threadId = Number(req.params.id);
-  const thread = db.prepare('SELECT id FROM threads WHERE id = ?').get(threadId);
+  const thread = one(await query('SELECT id FROM threads WHERE id = $1 LIMIT 1', [threadId]));
   if (!thread) return res.status(404).json({ error: 'Thread not found.' });
-  const existing = db.prepare('SELECT 1 FROM bookmarks WHERE thread_id = ? AND user_id = ?').get(threadId, req.user.id);
+  const existing = one(await query('SELECT 1 FROM bookmarks WHERE thread_id = $1 AND user_id = $2 LIMIT 1', [threadId, req.user.id]));
   if (existing) {
-    db.prepare('DELETE FROM bookmarks WHERE thread_id = ? AND user_id = ?').run(threadId, req.user.id);
+    await query('DELETE FROM bookmarks WHERE thread_id = $1 AND user_id = $2', [threadId, req.user.id]);
     res.json({ bookmarked: false });
   } else {
-    db.prepare('INSERT INTO bookmarks (thread_id, user_id) VALUES (?, ?)').run(threadId, req.user.id);
+    await query('INSERT INTO bookmarks (thread_id, user_id) VALUES ($1, $2)', [threadId, req.user.id]);
     res.json({ bookmarked: true });
   }
-});
+}));
 
-app.post('/api/reports', requireAuth, (req, res) => {
+app.post('/api/reports', requireAuth, asyncHandler(async (req, res) => {
   const reason = clean(req.body.reason, 800);
   const threadId = req.body.thread_id ? Number(req.body.thread_id) : null;
   const postId = req.body.post_id ? Number(req.body.post_id) : null;
   if (!reason) return res.status(400).json({ error: 'Report reason required.' });
   if (!threadId && !postId) return res.status(400).json({ error: 'Report must reference a thread or post.' });
-  db.prepare('INSERT INTO reports (reporter_id, thread_id, post_id, reason) VALUES (?, ?, ?, ?)').run(req.user.id, threadId, postId, reason);
+  await query('INSERT INTO reports (reporter_id, thread_id, post_id, reason) VALUES ($1, $2, $3, $4)', [req.user.id, threadId, postId, reason]);
   res.status(201).json({ ok: true });
   io.to('moderators').emit('report:created', { ok: true });
-});
+}));
 
-app.get('/api/admin/reports', requireModerator, (_req, res) => {
-  const reports = db.prepare(`
-    SELECT r.*, t.title AS thread_title, substr(p.body, 1, 160) AS post_excerpt, u.username AS reporter_username, u.display_name AS reporter_name
+app.get('/api/admin/reports', requireModerator, asyncHandler(async (_req, res) => {
+  const reports = (await query(`
+    SELECT r.*, t.title AS thread_title, substring(p.body from 1 for 160) AS post_excerpt, u.username AS reporter_username, u.display_name AS reporter_name
     FROM reports r
     LEFT JOIN threads t ON t.id = r.thread_id
     LEFT JOIN posts p ON p.id = r.post_id
     JOIN users u ON u.id = r.reporter_id
     WHERE r.status = 'open'
-    ORDER BY datetime(r.created_at) DESC
+    ORDER BY r.created_at DESC
     LIMIT 100
-  `).all();
+  `)).rows;
   res.json({ reports });
-});
-
-app.use((error, req, res, next) => {
-  if (!req.path.startsWith('/api/')) return next(error);
-  const message = process.env.NODE_ENV === 'production' ? 'Server error.' : error.message;
-  res.status(500).json({ error: 'Forum API error', details: message });
-});
+}));
 
 app.get('*', (req, res) => {
   let route = 'index.html';
@@ -356,7 +382,20 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', route));
 });
 
-server.listen(PORT, () => {
-  console.log(`AION OS website running at http://localhost:${PORT}`);
-  console.log(`Database: ${databasePath}`);
+app.use((err, _req, res, _next) => {
+  console.error(err);
+  res.status(500).json({ error: process.env.NODE_ENV === 'production' ? 'Internal server error.' : err.message });
 });
+
+(async () => {
+  try {
+    await initDb();
+    server.listen(PORT, () => {
+      console.log(`AION OS website running at http://localhost:${PORT}`);
+      console.log(`Database: ${databasePath}`);
+    });
+  } catch (error) {
+    console.error('Failed to start AION OS server:', error);
+    process.exit(1);
+  }
+})();
